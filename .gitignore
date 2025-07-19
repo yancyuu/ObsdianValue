@@ -1,0 +1,8 @@
+.obsidian/workspace
+.obsidian/workspace.json
+.obsidian/cache/
+.obsidian/plugins/*/data.json
+*.mp4
+*.pdf
+private/
+personal/
