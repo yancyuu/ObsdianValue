@@ -14,7 +14,7 @@
 **我踩过的坑：**
 
 - 🤮 **数据平铺脚本**：为了避免复杂JOIN，把多表数据拍平成宽表
-- 😡 **SQL预生成地狱**：基于平铺表写了几千行生成逻辑，各种条件判断
+- 😡 **SQL预生成地狱**：基于平铺表写了很多生成逻辑，各种条件判断
 - 🤬 **维护噩梦**：表结构一改，平铺脚本、SQL生成、UI模板全要改
 - 🤷‍♂️ **数据同步问题**：平铺数据和源表经常不一致
 
@@ -29,8 +29,6 @@
 ```
 
 **核心改进：不用JOIN了！**
-
-sql
 
 ```sql
 -- 现在的做法：利用PostgreSQL的metadata管理
@@ -63,12 +61,12 @@ CREATE TABLE knowledge_entities (
 
 ### 🛠️ 具体实现对比
 
-**以前的做法（平铺+JOIN噩梦）：**
+**以前的做法（平铺+SQL模板）：**
 
 python
 
 ```python
-# 痛苦的多表JOIN
+# 痛苦的数据平铺
 def get_user_info(user_id):
     sql = """
     SELECT u.name, d.name as dept, p.name as project

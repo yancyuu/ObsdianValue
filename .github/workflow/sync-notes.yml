@@ -1,0 +1,97 @@
+name: 同步笔记到docs
+
+on:
+  push:
+    branches: [ main ]
+    paths: 
+      - '*.md'
+      - 'agent/**/*.md'
+      - 'rag/**/*.md'
+      - '**/知识图谱构建.md'
+
+jobs:
+  sync-notes:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v3
+      
+    - name: 同步所有笔记文件
+      run: |
+        # 清理旧的笔记
+        rm -f docs/_posts/20*.md
+        
+        # 递归查找所有markdown文件（排除docs目录）
+        find . -name "*.md" -not -path "./docs/*" -not -path "./.git/*" -not -name "README.md" | while read file; do
+          echo "处理文件: $file"
+          
+          # 获取文件信息
+          filename=$(basename "$file" .md)
+          dir=$(dirname "$file" | sed 's|^\./||' | sed 's|/|-|g')  # 转换路径为标签
+          date=$(date -r "$file" +%Y-%m-%d)
+          
+          # 生成安全的文件名
+          safe_filename=$(echo "${filename}" | sed 's/[^a-zA-Z0-9\u4e00-\u9fa5]/-/g')
+          
+          # 创建Jekyll格式的文件
+          post_file="docs/_posts/${date}-${dir}-${safe_filename}.md"
+          
+          echo "---" > "$post_file"
+          echo "layout: post" >> "$post_file"
+          echo "title: \"$filename\"" >> "$post_file"
+          echo "date: $date" >> "$post_file"
+          echo "categories: [\"$dir\"]" >> "$post_file"
+          echo "tags: [\"$dir\", \"笔记\"]" >> "$post_file"
+          echo "source_path: \"$file\"" >> "$post_file"
+          echo "---" >> "$post_file"
+          echo "" >> "$post_file"
+          
+          # 处理Obsidian双链语法
+          sed 's/\[\[\([^]]*\)\]\]/[\1]({{ site.baseurl }}\/search\/?q=\1)/g' "$file" >> "$post_file"
+          
+          echo "生成: $post_file"
+        done
+        
+    - name: 生成笔记索引
+      run: |
+        # 创建分类页面
+        mkdir -p docs/_pages
+        
+        # agent分类页面
+        cat > docs/_pages/agent.md << 'EOF'
+        ---
+        layout: page
+        title: Agent相关笔记
+        permalink: /agent/
+        ---
+        
+        # 🤖 Agent相关笔记
+        
+        {% for post in site.categories.agent %}
+        - [{{ post.title }}]({{ post.url | relative_url }}) - {{ post.date | date: "%Y-%m-%d" }}
+        {% endfor %}
+        EOF
+        
+        # rag分类页面
+        cat > docs/_pages/rag.md << 'EOF'
+        ---
+        layout: page  
+        title: RAG相关笔记
+        permalink: /rag/
+        ---
+        
+        # 📚 RAG相关笔记
+        
+        {% for post in site.categories.rag %}
+        - [{{ post.title }}]({{ post.url | relative_url }}) - {{ post.date | date: "%Y-%m-%d" }}
+        {% endfor %}
+        EOF
+        
+    - name: 提交更改
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add docs/
+        git commit -m "自动同步笔记 $(date)" || exit 0
+        git push
