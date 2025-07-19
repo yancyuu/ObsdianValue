@@ -5,9 +5,9 @@ on:
     branches: [ main ]
     paths: 
       - '*.md'
-      - 'agent/**/*.md'
-      - 'rag/**/*.md'
-      - '**/知识图谱构建.md'
+      - '**/*.md'
+      - '!docs/**'
+      - '!README.md'
 
 jobs:
   sync-notes:
@@ -16,82 +16,201 @@ jobs:
     steps:
     - name: 检出代码
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+      
+    - name: 设置Ruby环境
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: 3.0
+        bundler-cache: true
+        working-directory: docs
       
     - name: 同步所有笔记文件
       run: |
-        # 清理旧的笔记
-        rm -f docs/_posts/20*.md
+        echo "开始同步笔记..."
         
-        # 递归查找所有markdown文件（排除docs目录）
-        find . -name "*.md" -not -path "./docs/*" -not -path "./.git/*" -not -name "README.md" | while read file; do
+        # 清理旧的笔记
+        rm -rf docs/_posts docs/_notes docs/_data/navigation.yml
+        mkdir -p docs/_posts docs/_notes docs/_data
+        
+        # 初始化导航数据
+        echo "navigation:" > docs/_data/navigation.yml
+        
+        # 计数器
+        total_count=0
+        agent_count=0
+        rag_count=0
+        other_count=0
+        
+        # 递归查找所有markdown文件
+        find . -name "*.md" \
+          -not -path "./docs/*" \
+          -not -path "./.git/*" \
+          -not -name "README.md" \
+          -not -name "readme.md" | sort | while read file; do
+          
           echo "处理文件: $file"
           
           # 获取文件信息
           filename=$(basename "$file" .md)
-          dir=$(dirname "$file" | sed 's|^\./||' | sed 's|/|-|g')  # 转换路径为标签
-          date=$(date -r "$file" +%Y-%m-%d)
+          relative_path="${file#./}"
+          dir_path=$(dirname "$relative_path")
+          
+          # 确定分类
+          if [[ "$relative_path" == agent/* ]]; then
+            category="agent"
+            category_name="Agent"
+          elif [[ "$relative_path" == rag/* ]]; then
+            category="rag" 
+            category_name="RAG"
+          else
+            category="knowledge"
+            category_name="知识库"
+          fi
+          
+          # 获取文件日期
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            file_date=$(stat -f %m "$file")
+            date=$(date -r "$file_date" +%Y-%m-%d)
+          else
+            date=$(date -r "$file" +%Y-%m-%d)
+          fi
           
           # 生成安全的文件名
-          safe_filename=$(echo "${filename}" | sed 's/[^a-zA-Z0-9\u4e00-\u9fa5]/-/g')
+          safe_filename=$(echo "${filename}" | sed 's/[^a-zA-Z0-9\u4e00-\u9fa5._-]/-/g' | sed 's/--*/-/g')
           
           # 创建Jekyll格式的文件
-          post_file="docs/_posts/${date}-${dir}-${safe_filename}.md"
+          post_file="docs/_posts/${date}-${category}-${safe_filename}.md"
           
-          echo "---" > "$post_file"
-          echo "layout: post" >> "$post_file"
-          echo "title: \"$filename\"" >> "$post_file"
-          echo "date: $date" >> "$post_file"
-          echo "categories: [\"$dir\"]" >> "$post_file"
-          echo "tags: [\"$dir\", \"笔记\"]" >> "$post_file"
-          echo "source_path: \"$file\"" >> "$post_file"
-          echo "---" >> "$post_file"
-          echo "" >> "$post_file"
+          # 读取原文件内容，处理编码
+          content=$(cat "$file" | iconv -f utf-8 -t utf-8 -c)
           
-          # 处理Obsidian双链语法
-          sed 's/\[\[\([^]]*\)\]\]/[\1]({{ site.baseurl }}\/search\/?q=\1)/g' "$file" >> "$post_file"
+          # 生成Jekyll文件
+          cat > "$post_file" << EOF
+---
+layout: post
+title: "${filename}"
+date: ${date}
+categories: ["${category}"]
+tags: ["${category_name}", "笔记"]
+source_path: "${relative_path}"
+category_name: "${category_name}"
+permalink: /${category}/${safe_filename}/
+---
+
+${content}
+EOF
           
           echo "生成: $post_file"
+          
+          # 更新计数（这里只是示例，实际计数在后面的Ruby脚本中）
+          total_count=$((total_count + 1))
+          
         done
         
-    - name: 生成笔记索引
+        # 生成导航结构
+        ruby -e "
+        require 'yaml'
+        require 'json'
+        
+        # 扫描所有生成的文件来构建导航
+        navigation = {
+          'navigation' => []
+        }
+        
+        categories = {}
+        
+        Dir.glob('docs/_posts/*.md').each do |file|
+          content = File.read(file)
+          if content =~ /^---\s*\n(.*?\n)---\s*\n/m
+            frontmatter = YAML.load(\$1)
+            category = frontmatter['categories']&.first
+            category_name = frontmatter['category_name']
+            title = frontmatter['title']
+            permalink = frontmatter['permalink']
+            
+            if category
+              categories[category] ||= {
+                'title' => category_name,
+                'items' => []
+              }
+              categories[category]['items'] << {
+                'title' => title,
+                'url' => permalink
+              }
+            end
+          end
+        end
+        
+        # 按分类组织导航
+        ['agent', 'rag', 'knowledge'].each do |cat|
+          if categories[cat]
+            navigation['navigation'] << {
+              'title' => categories[cat]['title'],
+              'url' => \"/#{cat}/\",
+              'items' => categories[cat]['items'].sort_by { |item| item['title'] }
+            }
+          end
+        end
+        
+        # 写入导航文件
+        File.write('docs/_data/navigation.yml', navigation.to_yaml)
+        
+        # 生成统计文件
+        stats = {
+          'total' => Dir.glob('docs/_posts/*.md').length,
+          'agent' => Dir.glob('docs/_posts/*-agent-*.md').length,
+          'rag' => Dir.glob('docs/_posts/*-rag-*.md').length,
+          'knowledge' => Dir.glob('docs/_posts/*-knowledge-*.md').length
+        }
+        
+        File.write('docs/_data/stats.yml', stats.to_yaml)
+        "
+        
+    - name: 生成分类页面
       run: |
-        # 创建分类页面
-        mkdir -p docs/_pages
-        
-        # agent分类页面
-        cat > docs/_pages/agent.md << 'EOF'
-        ---
-        layout: page
-        title: Agent相关笔记
-        permalink: /agent/
-        ---
-        
-        # 🤖 Agent相关笔记
-        
-        {% for post in site.categories.agent %}
-        - [{{ post.title }}]({{ post.url | relative_url }}) - {{ post.date | date: "%Y-%m-%d" }}
-        {% endfor %}
-        EOF
-        
-        # rag分类页面
-        cat > docs/_pages/rag.md << 'EOF'
-        ---
-        layout: page  
-        title: RAG相关笔记
-        permalink: /rag/
-        ---
-        
-        # 📚 RAG相关笔记
-        
-        {% for post in site.categories.rag %}
-        - [{{ post.title }}]({{ post.url | relative_url }}) - {{ post.date | date: "%Y-%m-%d" }}
-        {% endfor %}
-        EOF
+        # Agent分类页面
+        cat > docs/agent.md << 'EOF'
+---
+layout: category
+title: Agent相关笔记
+category: agent
+permalink: /agent/
+description: 智能代理、多Agent系统、Agentic RAG等技术学习
+---
+EOF
+
+        # RAG分类页面  
+        cat > docs/rag.md << 'EOF'
+---
+layout: category
+title: RAG相关笔记
+category: rag
+permalink: /rag/
+description: 检索增强生成、向量数据库、知识库构建等技术
+---
+EOF
+
+        # 知识库分类页面
+        cat > docs/knowledge.md << 'EOF'
+---
+layout: category  
+title: 知识库
+category: knowledge
+permalink: /knowledge/
+description: 知识图谱、数据库、系统架构等学习笔记
+---
+EOF
         
     - name: 提交更改
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add docs/
-        git commit -m "自动同步笔记 $(date)" || exit 0
-        git push
+        if git diff --staged --quiet; then
+          echo "没有变更需要提交"
+        else
+          git commit -m "自动同步笔记 $(date '+%Y-%m-%d %H:%M:%S')"
+          git push
+        fi
